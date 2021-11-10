@@ -1,0 +1,55 @@
+#!/bin/bash
+
+#SBATCH --output=${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOG_FILE}
+
+#SBATCH --partition ${PARTITION}
+
+#SBATCH --gres=gpu:${GPU_NUM}
+
+#SBATCH --export=ALL
+
+#SBATCH --ntasks=${TASK_NUM}
+
+#SBATCH --cpus-per-task=${CPUS_PER_TASK}
+
+#SBATCH --time=${JOB_RUN_TIME}
+
+#SBATCH --mem=${MEMORY_SIZE}
+
+#SBATCH --mail-type=${MAIL_TYPE}
+
+#SBATCH --mail-user=${MAIL_USER}
+
+if [[ -f "${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}" ]]; then
+    echo "observation data exists."
+    if [[ `du -b "${SOURCE_FILE}" | cut -f1` -ne `du -b "${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}" | cut -f1` ]]; then
+        echo "file size is different, re-copy the file"
+        cp ${SOURCE_FILE} ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}
+    else
+        echo "file size is the same, skip copying."
+    fi
+else
+    echo "copy the source file to local"
+    cp ${SOURCE_FILE} ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}
+fi
+
+
+cd ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}
+singularity exec --nv -H ${MAIN_DIRECTORY}:/workspace --pwd /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME} ${MAIN_DIRECTORY}/${SEARCH_IMAGE} /workspace/${PIPELINE} -init_default 
+rm -r ${JOB_NAME}.cfg known_pulsars
+cp -r ${KNOWN_PULSARS} known_pulsars
+
+srun singularity exec --nv -H ${MAIN_DIRECTORY}:/workspace ${MAIN_DIRECTORY}/${SEARCH_IMAGE} /workspace/${PIPELINE} -config /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME}/pipeline_config_${JOB_NAME} -obs /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}
+
+if [ $? -ne 0 ]; then
+    echo "Error"
+    exit -1
+fi
+
+singularity exec --nv -H ${MAIN_DIRECTORY}:/workspace ${MAIN_DIRECTORY}/${PULSAR_SOFTWARE_IMAGE} python /workspace/${CANDIDATE_SELECT_SCRIPT} /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME}/05_FOLDING/${JOB_NAME}  /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME}/candidate  /workspace/${SEARCHING_DIRECTORY}/${JOB_NAME}/known_pulsars $MINIMAL_DM $MAXIMAL_DM $MAXIMAL_HARMONIC
+
+gs -q -sPAPERSIZE=letter -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -sOutputFile=${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${JOB_NAME}_candidate_bundle.pdf ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/candidate/*.pdf
+
+find ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/03_DEDISPERSION/ -name "*.dat" -exec rm -rf {} \;
+
+rm ${MAIN_DIRECTORY}/${SEARCHING_DIRECTORY}/${JOB_NAME}/${LOCAL_FILE}
